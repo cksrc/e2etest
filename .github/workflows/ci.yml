@@ -1,0 +1,93 @@
+name: CI
+
+on:
+  push:
+    branches: [ main, develop ]
+  pull_request:
+    branches: [ main, develop ]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: ["3.11", "3.12"]
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Set up Python ${{ matrix.python-version }}
+      uses: actions/setup-python@v4
+      with:
+        python-version: ${{ matrix.python-version }}
+
+    - name: Install uv
+      uses: astral-sh/setup-uv@v2
+      with:
+        version: "latest"
+
+    - name: Install dependencies
+      run: |
+        uv pip install --system -e ".[dev]"
+
+    - name: Lint with ruff
+      run: |
+        ruff check --output-format=github .
+
+    - name: Check formatting with ruff
+      run: |
+        ruff format --check .
+
+    - name: Test with pytest
+      run: |
+        pytest --cov=app --cov-report=xml --cov-report=term
+
+    - name: Upload coverage to Codecov
+      uses: codecov/codecov-action@v3
+      with:
+        file: ./coverage.xml
+        flags: unittests
+        name: codecov-umbrella
+        fail_ci_if_error: false
+
+  integration-test:
+    runs-on: ubuntu-latest
+    needs: test
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Set up Python 3.11
+      uses: actions/setup-python@v4
+      with:
+        python-version: "3.11"
+
+    - name: Install uv
+      uses: astral-sh/setup-uv@v2
+      with:
+        version: "latest"
+
+    - name: Install dependencies
+      run: |
+        uv pip install --system -e ".[dev]"
+
+    - name: Set up environment
+      run: |
+        cp .env.example .env
+
+    - name: Start mock voice manager
+      run: |
+        python mock_voice_manager.py &
+        sleep 5  # Give server time to start
+
+    - name: Test voice client connection
+      run: |
+        python -c "
+        import asyncio
+        from app.voice_client import test_connection
+        asyncio.run(test_connection())
+        "
+
+    - name: Run integration tests
+      run: |
+        pytest -m "integration" --verbose
