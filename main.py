@@ -563,18 +563,13 @@ async def headless_execution(client: VoiceManagerClient, scenario_file: Path):
 
     try:
         with open(scenario_file, "r", encoding="utf-8") as f:
-            scenario_data = yaml.safe_load(f)
+            scenario_lines = [line.strip() for line in f if line.strip()]
     except Exception as e:
         print(f"Error loading scenario file: {e}")
         return
 
-    if not scenario_data or "commands" not in scenario_data:
-        print("Invalid scenario file: missing 'commands' section")
-        return
-
-    scenario_lines = scenario_data["commands"]
     if not scenario_lines:
-        print("No commands found in scenario")
+        print("No commands found in scenario file")
         return
 
     print(f"Loaded {len(scenario_lines)} commands from scenario")
@@ -617,7 +612,7 @@ async def headless_execution(client: VoiceManagerClient, scenario_file: Path):
             print("Continuing with next command...")
             continue
 
-    print(f"\nHeadless execution completed!")
+    print("\nHeadless execution completed!")
     print(f"Processed {len(scenario_lines)} commands")
 
 
