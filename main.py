@@ -206,12 +206,18 @@ async def interactive_chat_session(client: VoiceManagerClient, scenario_file: Pa
 
     print(f"✅ Loaded {len(scenario_lines)} lines from scenario")
     print("🎯 Interactive Mode: Each line will be sent one at a time")
-    print("📝 Press Enter after each response to continue to the next line")
-    print("💡 Type 'quit' or 'exit' at any prompt to stop")
+    print("📝 Controls:")
+    print("   • Press Enter to send the current command")
+    print("   • Type 'S' or 's' to skip the current command")
+    print("   • Type 'R' or 'r' to retry the current command")
+    print("   • Type 'quit' or 'exit' to stop")
     print("=" * 60)
 
     i = 0  # Initialize counter
-    for i, line in enumerate(scenario_lines, 1):
+    while i < len(scenario_lines):
+        current_line = scenario_lines[i]
+        line_number = i + 1
+
         if not client.is_connected():
             print("❌ Connection lost to voice manager")
             print(
@@ -238,42 +244,69 @@ async def interactive_chat_session(client: VoiceManagerClient, scenario_file: Pa
                 break
 
         try:
-            print(f"\n📤 Line {i}/{len(scenario_lines)}: {line}")
-            print("🔄 Sending to voice manager...")
+            # Show current command and next command preview
+            print(
+                f"\n📤 Current Command ({line_number}/{len(scenario_lines)}): {current_line}"
+            )
 
-            # Send the line to voice manager and wait for synchronous response
-            llm_response = await client.send_user_message(line)
-
-            if llm_response:
-                print(f"🤖 LLM Response: {llm_response}")
-            else:
-                print("❌ No response received from voice manager")
-
-            # Wait for user confirmation to continue (except for last line)
-            if i < len(scenario_lines):
+            # Show next command preview if available
+            if i + 1 < len(scenario_lines):
+                next_line = scenario_lines[i + 1]
                 print(
-                    "\n⏸️  Paused. Press Enter to send next line, or type 'quit' to stop..."
+                    f"👀 Next Command ({line_number + 1}/{len(scenario_lines)}): {next_line}"
                 )
-                user_input = await asyncio.to_thread(input, "Continue? ")
-                user_input = user_input.strip().lower()
+            else:
+                print("👀 Next Command: [End of scenario]")
 
-                if user_input in ["quit", "exit", "q", "stop"]:
-                    print("🛑 Scenario execution stopped by user")
-                    break
+            print("\n🎮 Controls: [Enter] Send | [S] Skip | [R] Retry | [quit] Exit")
+            user_choice = await asyncio.to_thread(input, "Your choice: ")
+            user_choice = user_choice.strip().lower()
+
+            # Handle user choices
+            if user_choice in ["quit", "exit", "q", "stop"]:
+                print("🛑 Scenario execution stopped by user")
+                break
+            elif user_choice in ["s", "skip"]:
+                print(f"⏭️  Skipped command: {current_line}")
+                i += 1  # Move to next command
+                continue
+            elif user_choice in ["r", "retry"]:
+                print(f"🔄 Retrying command: {current_line}")
+                # Don't increment i, will retry the same command
+            else:
+                # Default behavior (Enter pressed or any other input)
+                print("🔄 Sending to voice manager...")
+
+                # Send the line to voice manager and wait for synchronous response
+                llm_response = await client.send_user_message(current_line)
+
+                if llm_response:
+                    print(f"🤖 LLM Response: {llm_response}")
+                else:
+                    print("❌ No response received from voice manager")
+
+                i += 1  # Move to next command after successful send
 
         except (EOFError, KeyboardInterrupt):
             print("\n🛑 Scenario execution interrupted")
             break
         except Exception as e:
-            print(f"❌ Error processing line {i}: {e}")
+            print(f"❌ Error processing line {line_number}: {e}")
 
-            # Ask user if they want to continue
+            # Ask user if they want to continue, retry, or stop
             try:
-                continue_choice = await asyncio.to_thread(
-                    input, "Continue with next line? (y/N): "
+                error_choice = await asyncio.to_thread(
+                    input, "Error occurred. [Enter] Continue | [R] Retry | [Q] Quit: "
                 )
-                if continue_choice.strip().lower() not in ["y", "yes"]:
+                error_choice = error_choice.strip().lower()
+
+                if error_choice in ["q", "quit", "exit"]:
                     break
+                elif error_choice in ["r", "retry"]:
+                    continue  # Retry the same command
+                else:
+                    i += 1  # Continue to next command
+
             except (EOFError, KeyboardInterrupt):
                 break
 
