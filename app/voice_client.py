@@ -60,18 +60,11 @@ class VoiceManagerClient:
             await self._send_message(uid_message)
             print(f"📤 Registering user ID: {self.user_id}")
 
-            # Wait for confirmation
-            # response = await self._receive_message()
-            # if response and response.get("STATUS") == "UID_REGISTERED":
-            #     print("✅ User ID registered successfully")
-            #     self.connected = True
-            #     return True
-            # else:
-            #     print(f"❌ User ID registration failed: {response}")
-            #     return False
-
-            # Server might not send a confirmation, assume success if no error
+            # Real server doesn't send confirmation for UID registration
+            # Just assume success if we got this far without error
+            print("✅ User ID registered (no confirmation expected)")
             self.connected = True
+            return True
 
         except ConnectionRefusedError:
             print(
