@@ -5,15 +5,35 @@ MPT AI E2E Tester - Simple Command Line Interface
 
 import sys
 import asyncio
+import os
 from pathlib import Path
 import yaml
+from dotenv import load_dotenv
 from app.voice_client import VoiceManagerClient
 
 
 async def get_user_id():
-    """Prompt user for their USER_ID."""
+    """Get USER_ID from .env file or prompt user for input."""
+    # Load environment variables from .env file
+    load_dotenv()
+
+    # Try to get USER_ID from environment variables
+    env_user_id = os.getenv("USER_ID")
+
+    if env_user_id:
+        env_user_id = env_user_id.strip()
+        if env_user_id and validate_user_id(env_user_id):
+            print(f"📋 Using USER_ID from .env file: {env_user_id}")
+            return env_user_id
+        else:
+            print("⚠️  Invalid USER_ID in .env file, falling back to manual input")
+    else:
+        print("📝 No USER_ID found in .env file")
+
+    # Fall back to manual input
     print("\n📝 Please enter your User ID:")
     print("💡 This will be used to identify your session with the voice manager")
+    print("💡 You can also set USER_ID in your .env file to skip this step")
 
     while True:
         try:
@@ -24,17 +44,9 @@ async def get_user_id():
                 print("❌ User ID cannot be empty. Please try again.")
                 continue
 
-            # Basic validation - no spaces, reasonable length
-            if " " in user_id:
-                print("❌ User ID cannot contain spaces. Please try again.")
-                continue
-
-            if len(user_id) > 50:
-                print("❌ User ID too long (max 50 characters). Please try again.")
-                continue
-
-            print(f"✅ User ID set to: {user_id}")
-            return user_id
+            if validate_user_id(user_id):
+                print(f"✅ User ID set to: {user_id}")
+                return user_id
 
         except (EOFError, KeyboardInterrupt):
             print("\n❌ Operation cancelled")
@@ -42,6 +54,24 @@ async def get_user_id():
         except Exception as e:
             print(f"❌ Error getting user ID: {e}")
             return None
+
+
+def validate_user_id(user_id: str) -> bool:
+    """Validate user ID format."""
+    if not user_id:
+        print("❌ User ID cannot be empty.")
+        return False
+
+    # Basic validation - no spaces, reasonable length
+    if " " in user_id:
+        print("❌ User ID cannot contain spaces.")
+        return False
+
+    if len(user_id) > 50:
+        print("❌ User ID too long (max 50 characters).")
+        return False
+
+    return True
 
 
 def get_available_scenarios():
@@ -131,7 +161,14 @@ async def run_interactive_mode():
         connection_info = client.get_connection_info()
         print(f"   Host: {connection_info['host']}")
         print(f"   Port: {connection_info['port']}")
-        print(f"   User ID: {connection_info['user_id']} (provided by user)")
+        # Check if USER_ID came from .env file
+        env_user_id = os.getenv("USER_ID")
+        source = (
+            "from .env file"
+            if env_user_id and env_user_id.strip() == connection_info["user_id"]
+            else "provided by user"
+        )
+        print(f"   User ID: {connection_info['user_id']} ({source})")
         print()
 
         if await client.connect():
@@ -209,7 +246,8 @@ async def interactive_chat_session(client: VoiceManagerClient, scenario_file: Pa
     print("📝 Controls:")
     print("   • Press Enter to send the current command")
     print("   • Type 'S' or 's' to skip the current command")
-    print("   • Type 'R' or 'r' to retry the current command")
+    print("   • Type 'R' or 'r' to retry current command, or 'R:5' to replay line 5")
+    print("   • Type 'I' or 'i' to insert and send a custom command")
     print("   • Type 'quit' or 'exit' to stop")
     print("=" * 60)
 
@@ -258,21 +296,76 @@ async def interactive_chat_session(client: VoiceManagerClient, scenario_file: Pa
             else:
                 print("👀 Next Command: [End of scenario]")
 
-            print("\n🎮 Controls: [Enter] Send | [S] Skip | [R] Retry | [quit] Exit")
+            print(
+                "\n🎮 Controls: [Enter] Send | [S] Skip | [R] Retry | [R:N] Replay Line N | [I] Insert | [quit] Exit"
+            )
             user_choice = await asyncio.to_thread(input, "Your choice: ")
-            user_choice = user_choice.strip().lower()
+            user_choice = user_choice.strip()
 
             # Handle user choices
-            if user_choice in ["quit", "exit", "q", "stop"]:
+            user_choice_lower = user_choice.lower()
+
+            if user_choice_lower in ["quit", "exit", "q", "stop"]:
                 print("🛑 Scenario execution stopped by user")
                 break
-            elif user_choice in ["s", "skip"]:
+            elif user_choice_lower in ["s", "skip"]:
                 print(f"⏭️  Skipped command: {current_line}")
                 i += 1  # Move to next command
                 continue
-            elif user_choice in ["r", "retry"]:
+            elif user_choice_lower in ["r", "retry"]:
                 print(f"🔄 Retrying command: {current_line}")
                 # Don't increment i, will retry the same command
+            elif user_choice_lower.startswith("r:"):
+                # Handle replay specific line (e.g., "r:5" to replay line 5)
+                try:
+                    replay_line_str = user_choice_lower.split(":", 1)[1]
+                    replay_line_num = int(replay_line_str)
+
+                    if 1 <= replay_line_num <= len(scenario_lines):
+                        replay_command = scenario_lines[replay_line_num - 1]
+                        print(f"🔄 Replaying line {replay_line_num}: {replay_command}")
+
+                        # Send the replay command
+                        print("🔄 Sending to voice manager...")
+                        llm_response = await client.send_user_message(replay_command)
+
+                        if llm_response:
+                            print(f"🤖 LLM Response: {llm_response}")
+                        else:
+                            print("❌ No response received from voice manager")
+
+                        # Don't increment i, stay on current command
+                    else:
+                        print(
+                            f"❌ Invalid line number: {replay_line_num}. Valid range: 1-{len(scenario_lines)}"
+                        )
+
+                except (ValueError, IndexError):
+                    print("❌ Invalid format. Use 'R:5' to replay line 5")
+            elif user_choice_lower in ["i", "insert"]:
+                # Handle manual command insertion
+                try:
+                    custom_command = await asyncio.to_thread(
+                        input, "💬 Enter custom command: "
+                    )
+                    custom_command = custom_command.strip()
+
+                    if custom_command:
+                        print(f"📝 Sending custom command: {custom_command}")
+                        print("🔄 Sending to voice manager...")
+
+                        llm_response = await client.send_user_message(custom_command)
+
+                        if llm_response:
+                            print(f"🤖 LLM Response: {llm_response}")
+                        else:
+                            print("❌ No response received from voice manager")
+                    else:
+                        print("❌ Empty command, skipping")
+
+                    # Don't increment i, stay on current command
+                except (EOFError, KeyboardInterrupt):
+                    print("\n❌ Custom command input cancelled")
             else:
                 # Default behavior (Enter pressed or any other input)
                 print("🔄 Sending to voice manager...")
