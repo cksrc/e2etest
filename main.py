@@ -296,19 +296,10 @@ async def interactive_chat_session(client: VoiceManagerClient, scenario_file: Pa
                 break
 
         try:
-            # Show current command and next command preview
+            # Show the command that will be executed when Enter is pressed
             print(
-                f"\nCurrent Command ({line_number}/{len(scenario_lines)}): {current_line}"
+                f"\nCommand to execute ({line_number}/{len(scenario_lines)}): {current_line}"
             )
-
-            # Show next command preview if available
-            if i + 1 < len(scenario_lines):
-                next_line = scenario_lines[i + 1]
-                print(
-                    f"Next Command ({line_number + 1}/{len(scenario_lines)}): {next_line}"
-                )
-            else:
-                print("Next Command: [End of scenario]")
 
             print(
                 "\nControls: [Enter] Send | [S] Skip | [R] Retry | [R:N] Replay Line N | [I] Insert | [G:N] Go to Line N | [quit] Exit"
@@ -501,6 +492,135 @@ async def manual_chat_session(client: VoiceManagerClient):
     print("Manual chat session ended")
 
 
+async def run_headless_mode():
+    """Run headless mode - automated execution without user interaction."""
+    print("Starting Headless Mode")
+    print("=" * 60)
+
+    # Load environment variables
+    load_dotenv()
+
+    # Check if USER_ID is available in .env file
+    env_user_id = os.getenv("USER_ID")
+    if not env_user_id or not env_user_id.strip():
+        print("Error: USER_ID must be set in .env file for headless mode")
+        print("Please add USER_ID=your_user_id to your .env file")
+        return
+
+    user_id = env_user_id.strip()
+    if not validate_user_id(user_id):
+        print(f"Error: Invalid USER_ID in .env file: '{user_id}'")
+        print("USER_ID must contain only letters, numbers, underscores, and hyphens")
+        return
+
+    print(f"Using USER_ID from .env file: {user_id}")
+
+    # Get available scenarios
+    scenarios = get_available_scenarios()
+    if not scenarios:
+        print("No scenario files found in 'scenarios' directory")
+        print("Please create .yaml or .yml files in the scenarios folder")
+        return
+
+    # Show available scenarios
+    print("\nAvailable scenarios:")
+    for i, scenario_file in enumerate(scenarios, 1):
+        print(f"  {i}. {scenario_file.name}")
+
+    # For headless mode, use the first scenario or allow selection
+    print(f"\nUsing first available scenario: {scenarios[0].name}")
+    selected_scenario = scenarios[0]
+
+    # Create client and connect
+    client = VoiceManagerClient(user_id=user_id)
+
+    try:
+        print("\nConnection details:")
+        print(f"   Host: {client.host}")
+        print(f"   Port: {client.port}")
+        print(f"   User ID: {client.user_id}")
+
+        if await client.connect():
+            print("Successfully connected to voice manager!")
+            await headless_execution(client, selected_scenario)
+        else:
+            print("Failed to connect to voice manager")
+            print("Make sure the voice manager is running:")
+            print("   python mock_voice_manager.py")
+
+    except Exception as e:
+        print(f"Error in headless mode: {e}")
+
+    finally:
+        if client.is_connected():
+            await client.disconnect()
+        print("Headless mode ended")
+
+
+async def headless_execution(client: VoiceManagerClient, scenario_file: Path):
+    """Execute scenario automatically without user interaction."""
+    print(f"\nLoading scenario: {scenario_file.name}")
+
+    try:
+        with open(scenario_file, "r", encoding="utf-8") as f:
+            scenario_data = yaml.safe_load(f)
+    except Exception as e:
+        print(f"Error loading scenario file: {e}")
+        return
+
+    if not scenario_data or "commands" not in scenario_data:
+        print("Invalid scenario file: missing 'commands' section")
+        return
+
+    scenario_lines = scenario_data["commands"]
+    if not scenario_lines:
+        print("No commands found in scenario")
+        return
+
+    print(f"Loaded {len(scenario_lines)} commands from scenario")
+    print("Headless Mode: Commands will be executed automatically with 3-second delays")
+    print("=" * 60)
+
+    for i, command in enumerate(scenario_lines):
+        line_number = i + 1
+
+        if not client.is_connected():
+            print("Connection lost to voice manager")
+            print("Attempting to reconnect...")
+            if await client.reconnect():
+                print("Reconnected successfully! Continuing scenario...")
+            else:
+                print("Reconnection failed. Stopping scenario.")
+                break
+
+        try:
+            print(
+                f"\nExecuting command ({line_number}/{len(scenario_lines)}): {command}"
+            )
+            print("Sending to voice manager...")
+
+            # Send the command to voice manager
+            llm_response = await client.send_user_message(command)
+
+            if llm_response:
+                print(f"LLM Response: {llm_response}")
+            else:
+                print("No response received from voice manager")
+
+            # Wait 3 seconds before next command (except for the last command)
+            if i < len(scenario_lines) - 1:
+                print("Waiting 3 seconds before next command...")
+                await asyncio.sleep(3)
+
+        except Exception as e:
+            print(f"Error processing command {line_number}: {e}")
+            print("Continuing with next command...")
+            continue
+
+    print(f"\nHeadless execution completed!")
+    print(f"Processed {len(scenario_lines)} commands")
+
+
 def main():
     """Main entry point for the MPT AI E2E Tester CLI."""
     print("=" * 60)
@@ -533,6 +653,7 @@ def main():
                 break
             elif choice == "2":
                 print("Headless mode selected")
+                asyncio.run(run_headless_mode())
                 break
             else:
                 print("Invalid choice. Please enter 1 or 2.")
