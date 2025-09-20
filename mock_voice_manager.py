@@ -108,10 +108,8 @@ class MockVoiceManager:
                 await self._send_error(websocket, "UID must be a non-empty string")
                 return None
 
-            # Send confirmation
-            await self._send_message(
-                websocket, {"STATUS": "UID_REGISTERED", "UID": uid}
-            )
+            # Real server doesn't send UID confirmation, so we don't either
+            self.logger.info(f"UID {uid} registered (no confirmation sent)")
 
             return uid
 
@@ -144,12 +142,19 @@ class MockVoiceManager:
                     await self._send_error(websocket, "Invalid JSON format")
                     continue
 
-                # Handle USER messages
-                if "USER" in data:
-                    await self._handle_user_message(websocket, uid, data["USER"])
+                # Handle messages with new format: {"command": "USER", "message": "content"}
+                if "command" in data and "message" in data:
+                    if data["command"] == "USER":
+                        await self._handle_user_message(websocket, uid, data["message"])
+                    else:
+                        await self._send_error(
+                            websocket,
+                            f"Unknown command: {data['command']}. Expected 'USER'.",
+                        )
                 else:
                     await self._send_error(
-                        websocket, "Unknown message format. Expected USER field."
+                        websocket,
+                        "Invalid message format. Expected: {'command': 'USER', 'message': 'content'}",
                     )
 
             except Exception as e:
@@ -158,7 +163,7 @@ class MockVoiceManager:
 
     async def _handle_user_message(self, websocket, uid: str, user_prompt: str):
         """
-        Handle a USER message and generate LLM response.
+        Handle a USER message and generate synchronous LLM response.
 
         Args:
             websocket: WebSocket connection
@@ -170,11 +175,11 @@ class MockVoiceManager:
         # Generate mock LLM response based on the prompt
         llm_response = self._generate_mock_response(user_prompt)
 
-        # Send LLM response
-        response = {"LLM": llm_response}
+        # Send immediate synchronous LLM response: {"command": "LLM", "message": "response"}
+        response = {"command": "LLM", "message": llm_response}
         await self._send_message(websocket, response)
 
-        self.logger.info(f"Sent LLM response to {uid}: '{llm_response}'")
+        self.logger.info(f"Sent synchronous LLM response to {uid}: '{llm_response}'")
 
     def _generate_mock_response(self, user_prompt: str) -> str:
         """
@@ -258,12 +263,16 @@ class MockVoiceManager:
         # Start websocket server
         server = await websockets.serve(self.handle_client, self.host, self.port)
 
-        print(f"🤖 Mock Voice Manager Server Started")
+        print(f"🤖 Mock Voice Manager Server Started (Synchronous Mode)")
         print(f"📡 Listening on ws://{self.host}:{self.port}")
         print(f"📋 Expected message format:")
         print(f'   1. First message: {{"UID": "user_id_here"}}')
-        print(f'   2. User messages: {{"USER": "user prompt goes here"}}')
-        print(f'   3. Server responds: {{"LLM": "Response from LLM"}}')
+        print(
+            '   2. User messages: {"command": "USER", "message": "user prompt goes here"}'
+        )
+        print(
+            '   3. Server responds synchronously: {"command": "LLM", "message": "Response from LLM"}'
+        )
         print(f"\n🔄 Server is running... Press Ctrl+C to stop")
 
         try:

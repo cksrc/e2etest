@@ -218,15 +218,10 @@ async def interactive_chat_session(client: VoiceManagerClient, scenario_file: Pa
             print(f"\n📤 Line {i}/{len(scenario_lines)}: {line}")
             print("🔄 Sending to voice manager...")
 
-            # Send the line to voice manager
-            response = await client.send_user_message(line)
+            # Send the line to voice manager and wait for synchronous response
+            llm_response = await client.send_user_message(line)
 
-            if response:
-                # Handle both string and dict responses
-                if isinstance(response, dict):
-                    llm_response = response.get("LLM", "No response received")
-                else:
-                    llm_response = str(response)
+            if llm_response:
                 print(f"🤖 LLM Response: {llm_response}")
             else:
                 print("❌ No response received from voice manager")

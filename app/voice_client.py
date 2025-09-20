@@ -39,6 +39,8 @@ class VoiceManagerClient:
         self.websocket = None
         self.connected = False
         self.last_response = None
+        self.message_callback = None
+        self.listener_task = None
 
     async def connect(self) -> bool:
         """
@@ -77,36 +79,36 @@ class VoiceManagerClient:
 
     async def send_user_message(self, prompt: str) -> Optional[str]:
         """
-        Send a user message and wait for LLM response.
+        Send a user message to the voice manager and wait for synchronous response.
 
         Args:
             prompt: User prompt to send
 
         Returns:
-            LLM response string or None if failed
+            LLM response string if successful, None if failed
         """
         if not self.connected:
             print("❌ Not connected to voice manager")
             return None
 
         try:
-            # Send user message
-            user_message = {"USER": prompt}
+            # Send user message with new format: {"command": "USER", "message": "content"}
+            user_message = {"command": "USER", "message": prompt}
             await self._send_message(user_message)
             print(f"📤 Sent: {prompt}")
 
-            # Wait for LLM response
+            # Wait for synchronous response
             response = await self._receive_message()
-            if response and "LLM" in response:
-                llm_response = response["LLM"]
-                self.last_response = llm_response
+            if response and response.get("command") == "LLM" and "message" in response:
+                llm_response = response["message"]
+                self.last_response = response
                 print(f"📥 Received: {llm_response}")
                 return llm_response
-            elif response and "ERROR" in response:
-                print(f"❌ Error from voice manager: {response['ERROR']}")
+            elif response:
+                print(f"❌ Unexpected response format: {response}")
                 return None
             else:
-                print(f"❌ Unexpected response format: {response}")
+                print("❌ No response received from voice manager")
                 return None
 
         except websockets.exceptions.ConnectionClosed:
@@ -117,13 +119,53 @@ class VoiceManagerClient:
             print(f"❌ Error sending message: {e}")
             return None
 
+    async def _message_listener(self):
+        """Background task to listen for asynchronous messages from the server."""
+        try:
+            while self.connected and self.websocket:
+                try:
+                    message = await self.websocket.recv()
+                    data = json.loads(message)
+
+                    # Handle LLM responses with new format: {"command": "LLM", "message": "response"}
+                    if data.get("command") == "LLM" and "message" in data:
+                        llm_response = data["message"]
+                        print(f"📥 Received: {llm_response}")
+                        self.last_response = data
+
+                        # Call callback if set
+                        if self.message_callback:
+                            self.message_callback(data)
+                    else:
+                        print(f"❌ Unexpected message format: {data}")
+
+                except websockets.exceptions.ConnectionClosed:
+                    print("🔌 Connection closed by server")
+                    self.connected = False
+                    break
+                except json.JSONDecodeError as e:
+                    print(f"❌ Invalid JSON received: {e}")
+                except Exception as e:
+                    print(f"❌ Error in message listener: {e}")
+
+        except Exception as e:
+            print(f"❌ Message listener error: {e}")
+        finally:
+            self.connected = False
+
+    def set_message_callback(self, callback):
+        """Set a callback function to handle incoming messages."""
+        self.message_callback = callback
+
     async def disconnect(self):
         """Disconnect from the voice manager."""
+        self.connected = False
+
+        # Close websocket
         if self.websocket and self.websocket.close_code is None:
             await self.websocket.close()
             print("🔌 Disconnected from voice manager")
 
-        self.connected = False
         self.websocket = None
 
     async def _send_message(self, data: Dict[str, Any]):
