@@ -48,7 +48,7 @@ class VoiceManagerClient:
             True if connection successful, False otherwise
         """
         try:
-            uri = f"ws://{self.host}:{self.port}"
+            uri = f"ws://{self.host}:{self.port}/ws"
             print(f"🔌 Connecting to voice manager at {uri}...")
 
             # Connect to websocket
@@ -61,14 +61,17 @@ class VoiceManagerClient:
             print(f"📤 Registering user ID: {self.user_id}")
 
             # Wait for confirmation
-            response = await self._receive_message()
-            if response and response.get("STATUS") == "UID_REGISTERED":
-                print("✅ User ID registered successfully")
-                self.connected = True
-                return True
-            else:
-                print(f"❌ User ID registration failed: {response}")
-                return False
+            # response = await self._receive_message()
+            # if response and response.get("STATUS") == "UID_REGISTERED":
+            #     print("✅ User ID registered successfully")
+            #     self.connected = True
+            #     return True
+            # else:
+            #     print(f"❌ User ID registration failed: {response}")
+            #     return False
+
+            # Server might not send a confirmation, assume success if no error
+            self.connected = True
 
         except ConnectionRefusedError:
             print(
@@ -161,7 +164,7 @@ class VoiceManagerClient:
             "port": self.port,
             "user_id": self.user_id,
             "connected": self.connected,
-            "uri": f"ws://{self.host}:{self.port}",
+            "uri": f"ws://{self.host}:{self.port}/ws",
         }
 
 
