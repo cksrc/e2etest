@@ -41,6 +41,7 @@ class VoiceManagerClient:
         self.last_response = None
         self.message_callback = None
         self.listener_task = None
+        self._prefetched_messages = []  # buffer for messages read during connect()
 
     async def connect(self) -> bool:
         """
@@ -60,11 +61,47 @@ class VoiceManagerClient:
             # Send UID registration with new format: {"command": "UID", "message": "user_id"}
             uid_message = {"command": "UID", "message": self.user_id}
             await self._send_message(uid_message)
-            print(f"📤 Registering user ID: {self.user_id}")
+            print(f"📤 Registering user ID (new format): {self.user_id}")
 
-            # Real server doesn't send confirmation for UID registration
-            # Just assume success if we got this far without error
-            print("✅ User ID registered (no confirmation expected)")
+            # Try to detect mock server error and fall back to legacy UID format
+            try:
+                incoming = await asyncio.wait_for(self.websocket.recv(), timeout=0.3)
+                if isinstance(incoming, (bytes, bytearray)):
+                    # Buffer binary too in case upper layers expect it
+                    self._prefetched_messages.append(incoming)
+                else:
+                    try:
+                        data = json.loads(incoming)
+                        if isinstance(data, dict) and "ERROR" in data:
+                            error_msg = str(data.get("ERROR"))
+                            # Mock server expects legacy UID format: {"UID": "..."}
+                            if (
+                                "UID" in error_msg
+                                or "First message must contain UID" in error_msg
+                            ):
+                                print(
+                                    "ℹ️ Falling back to legacy UID registration format"
+                                )
+                                await self._send_legacy_uid()
+                        else:
+                            # Not an error: buffer for later consumption by send_user_message
+                            self._prefetched_messages.append(incoming)
+                    except Exception:
+                        # Non-JSON: buffer as-is
+                        self._prefetched_messages.append(incoming)
+            except asyncio.TimeoutError:
+                # No immediate error — proceed normally (real server case)
+                pass
+            except websockets.exceptions.ConnectionClosed:
+                # Server closed after wrong UID format — try reconnect with legacy UID
+                print(
+                    "ℹ️ Server closed after UID registration, retrying with legacy format..."
+                )
+                if not await self._reconnect_with_legacy_uid(uri):
+                    return False
+
+            # If we got here, consider registration successful
+            print("✅ User ID registered")
             self.connected = True
             return True
 
@@ -75,6 +112,30 @@ class VoiceManagerClient:
             return False
         except Exception as e:
             print(f"❌ Connection failed: {e}")
+            return False
+
+    async def _send_legacy_uid(self) -> None:
+        """Send legacy UID registration expected by the mock server: {"UID": "..."}."""
+        legacy = {"UID": self.user_id}
+        await self._send_message(legacy)
+        print(f"📤 Registering user ID (legacy format): {self.user_id}")
+
+    async def _reconnect_with_legacy_uid(self, uri: str) -> bool:
+        """Reconnect and register using legacy UID format for mock server compatibility."""
+        try:
+            # Ensure previous socket is closed
+            if self.websocket and self.websocket.close_code is None:
+                try:
+                    await self.websocket.close()
+                except Exception:
+                    pass
+            self.websocket = await websockets.connect(uri)
+            await self._send_legacy_uid()
+            self.connected = True
+            return True
+        except Exception as e:
+            print(f"❌ Legacy UID reconnect failed: {e}")
+            self.connected = False
             return False
 
     async def send_user_message(self, prompt: str) -> Optional[str]:
@@ -310,7 +371,10 @@ class VoiceManagerClient:
             return None
 
         try:
-            message = await self.websocket.recv()
+            if self._prefetched_messages:
+                message = self._prefetched_messages.pop(0)
+            else:
+                message = await self.websocket.recv()
 
             # Handle binary data - ignore it
             if isinstance(message, bytes):

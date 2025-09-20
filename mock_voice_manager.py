@@ -99,14 +99,21 @@ class MockVoiceManager:
                 await self._send_error(websocket, "Invalid JSON format")
                 return None
 
-            if "UID" not in data:
-                await self._send_error(websocket, "First message must contain UID")
+            # Expect real server format: {"command": "UID", "message": "<user_id>"}
+            msg = data.get("message") if isinstance(data, dict) else None
+            if not (
+                isinstance(data, dict)
+                and data.get("command") == "UID"
+                and isinstance(msg, str)
+                and msg.strip()
+            ):
+                await self._send_error(
+                    websocket,
+                    "First message must be {'command': 'UID', 'message': '<user_id>'}",
+                )
                 return None
 
-            uid = data["UID"]
-            if not uid or not isinstance(uid, str):
-                await self._send_error(websocket, "UID must be a non-empty string")
-                return None
+            uid = msg.strip()
 
             # Real server doesn't send UID confirmation, so we don't either
             self.logger.info(f"UID {uid} registered (no confirmation sent)")
@@ -263,17 +270,17 @@ class MockVoiceManager:
         # Start websocket server
         server = await websockets.serve(self.handle_client, self.host, self.port)
 
-        print(f"🤖 Mock Voice Manager Server Started (Synchronous Mode)")
+        print("🤖 Mock Voice Manager Server Started (Synchronous Mode)")
         print(f"📡 Listening on ws://{self.host}:{self.port}")
-        print(f"📋 Expected message format:")
-        print(f'   1. First message: {{"UID": "user_id_here"}}')
+        print("📋 Expected message format:")
+        print("   1. First message: {'command': 'UID', 'message': 'user_id_here'}")
         print(
             '   2. User messages: {"command": "USER", "message": "user prompt goes here"}'
         )
         print(
             '   3. Server responds synchronously: {"command": "LLM", "message": "Response from LLM"}'
         )
-        print(f"\n🔄 Server is running... Press Ctrl+C to stop")
+        print("\n🔄 Server is running... Press Ctrl+C to stop")
 
         try:
             # Keep server running
