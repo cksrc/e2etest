@@ -162,7 +162,9 @@ async def run_interactive_mode():
         print(f"❌ Error in interactive mode: {e}")
 
     finally:
-        await client.disconnect()
+        # Only disconnect if still connected (user might have disconnected manually)
+        if client.is_connected():
+            await client.disconnect()
         print("👋 Interactive mode ended")
 
 
@@ -215,7 +217,25 @@ async def interactive_chat_session(client: VoiceManagerClient, scenario_file: Pa
             print(
                 "💡 The server may have closed the connection after sending audio data"
             )
-            break
+
+            # Ask user if they want to reconnect and continue
+            try:
+                reconnect_choice = await asyncio.to_thread(
+                    input, "🔄 Try to reconnect and continue? (y/N): "
+                )
+                if reconnect_choice.strip().lower() in ["y", "yes"]:
+                    if await client.reconnect():
+                        print("✅ Reconnected successfully! Continuing scenario...")
+                        continue
+                    else:
+                        print("❌ Reconnection failed. Stopping scenario.")
+                        break
+                else:
+                    print("🛑 Scenario execution stopped.")
+                    break
+            except (EOFError, KeyboardInterrupt):
+                print("\n🛑 Scenario execution interrupted")
+                break
 
         try:
             print(f"\n📤 Line {i}/{len(scenario_lines)}: {line}")
@@ -261,6 +281,65 @@ async def interactive_chat_session(client: VoiceManagerClient, scenario_file: Pa
     print(
         f"📊 Processed {min(i, len(scenario_lines))} out of {len(scenario_lines)} lines"
     )
+
+    # Ask user if they want to keep the connection open for manual testing
+    if client.is_connected():
+        print("\n🔌 Connection is still active!")
+        print("💡 You can now send manual commands or keep the connection open")
+        try:
+            keep_open = await asyncio.to_thread(
+                input, "Keep connection open for manual testing? (y/N): "
+            )
+            if keep_open.strip().lower() in ["y", "yes"]:
+                print("🎯 Connection kept open. You can send manual commands:")
+                print("📝 Type your message and press Enter, or 'quit' to disconnect")
+                await manual_chat_session(client)
+        except (EOFError, KeyboardInterrupt):
+            print("\n🔌 Proceeding to disconnect...")
+    else:
+        print("\n🔌 Connection was lost during scenario execution")
+
+
+async def manual_chat_session(client: VoiceManagerClient):
+    """Allow manual interaction with the voice manager after scenario completion."""
+    print("\n" + "=" * 60)
+    print("🎯 Manual Chat Mode")
+    print("=" * 60)
+    print("💬 You can now send messages directly to the voice manager")
+    print("📝 Type your message and press Enter")
+    print("🛑 Type 'quit', 'exit', or 'disconnect' to close the connection")
+    print("=" * 60)
+
+    while client.is_connected():
+        try:
+            user_input = await asyncio.to_thread(input, "\n💬 Your message: ")
+            user_input = user_input.strip()
+
+            if not user_input:
+                print("❌ Please enter a message")
+                continue
+
+            if user_input.lower() in ["quit", "exit", "disconnect", "q"]:
+                print("🛑 Disconnecting from voice manager...")
+                break
+
+            print(f"📤 Sending: {user_input}")
+            response = await client.send_user_message(user_input)
+
+            if response:
+                print(f"🤖 Response: {response}")
+            else:
+                print("❌ No response received or connection lost")
+                break
+
+        except (EOFError, KeyboardInterrupt):
+            print("\n🛑 Manual chat session interrupted")
+            break
+        except Exception as e:
+            print(f"❌ Error in manual chat: {e}")
+            break
+
+    print("👋 Manual chat session ended")
 
 
 def main():
