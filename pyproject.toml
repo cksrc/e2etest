@@ -53,10 +53,16 @@ ignore = [
 minversion = "7.0"
 addopts = "-v"
 testpaths = ["tests"]
+asyncio_mode = "auto"
+markers = [
+    "asyncio: mark test as async",
+    "integration: mark test as integration test"
+]
 
 [dependency-groups]
 dev = [
     "pytest>=8.4.2",
+    "pytest-asyncio>=1.2.0",
 ]
 
 

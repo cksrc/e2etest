@@ -17,7 +17,8 @@ class TestVoiceClient:
         client = VoiceManagerClient()
         assert client.host == "localhost"
         assert client.port == 8070
-        assert client.user_id == "test_user"
+        # USER_ID comes from .env file
+        assert client.user_id == "test_user_001"
         assert not client.connected
         assert client.websocket is None
 

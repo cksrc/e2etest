@@ -210,8 +210,11 @@ async def interactive_chat_session(client: VoiceManagerClient, scenario_file: Pa
 
     i = 0  # Initialize counter
     for i, line in enumerate(scenario_lines, 1):
-        if not client.connected:
+        if not client.is_connected():
             print("❌ Connection lost to voice manager")
+            print(
+                "💡 The server may have closed the connection after sending audio data"
+            )
             break
 
         try:

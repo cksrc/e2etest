@@ -57,8 +57,8 @@ class VoiceManagerClient:
             self.websocket = await websockets.connect(uri)
             print("✅ Connected to voice manager")
 
-            # Send UID registration
-            uid_message = {"UID": self.user_id}
+            # Send UID registration with new format: {"command": "UID", "message": "user_id"}
+            uid_message = {"command": "UID", "message": self.user_id}
             await self._send_message(uid_message)
             print(f"📤 Registering user ID: {self.user_id}")
 
@@ -81,6 +81,11 @@ class VoiceManagerClient:
         """
         Send a user message to the voice manager and wait for synchronous response.
 
+        The real server sends multiple messages after a USER message:
+        1. LLM response: {"command": "LLM", "message": "response"}
+        2. Audio header: {"client_id": "...", "audio_id": "...", ...}
+        3. Audio bytes (binary data)
+
         Args:
             prompt: User prompt to send
 
@@ -97,18 +102,20 @@ class VoiceManagerClient:
             await self._send_message(user_message)
             print(f"📤 Sent: {prompt}")
 
-            # Wait for synchronous response
-            response = await self._receive_message()
-            if response and response.get("command") == "LLM" and "message" in response:
-                llm_response = response["message"]
-                self.last_response = response
+            # Wait for the first response (LLM response)
+            llm_response = await self._receive_llm_response()
+            if llm_response:
                 print(f"📥 Received: {llm_response}")
+
+                # After LLM response, the real server may send additional data
+                # (audio header + audio bytes) that we need to consume and ignore
+                # Only try this if we're still connected
+                if self.connected:
+                    await self._consume_additional_server_data()
+
                 return llm_response
-            elif response:
-                print(f"❌ Unexpected response format: {response}")
-                return None
             else:
-                print("❌ No response received from voice manager")
+                print("❌ No LLM response received from voice manager")
                 return None
 
         except websockets.exceptions.ConnectionClosed:
@@ -118,6 +125,125 @@ class VoiceManagerClient:
         except Exception as e:
             print(f"❌ Error sending message: {e}")
             return None
+
+    async def _receive_llm_response(self) -> Optional[str]:
+        """
+        Receive and parse the LLM response message from the voice manager.
+
+        Returns:
+            LLM response string if successful, None if failed
+        """
+        response = await self._receive_message()
+        if response and response.get("command") == "LLM" and "message" in response:
+            llm_response = response["message"]
+            self.last_response = response
+            return llm_response
+        elif response:
+            print(f"❌ Unexpected response format: {response}")
+            return None
+        else:
+            return None
+
+    async def _consume_additional_server_data(self):
+        """
+        Consume additional data that the real server sends after LLM response.
+        This includes audio header (JSON) and audio bytes (binary data).
+
+        The mock server doesn't send this additional data, so we handle both cases.
+        """
+        if not self.connected:
+            print("📝 Not connected - skipping additional data consumption")
+            return
+
+        try:
+            # Try to receive audio header message (JSON format)
+            # Set a short timeout since mock server won't send this
+            header_message = await asyncio.wait_for(
+                self._receive_message_or_bytes(), timeout=1.0
+            )
+
+            if not self.connected:
+                print("📝 Connection lost during audio header reception")
+                return
+
+            if header_message:
+                if isinstance(header_message, dict):
+                    # This is the audio header JSON message
+                    print(
+                        f"🎵 Received audio header (ignoring): client_id={header_message.get('client_id', 'unknown')}"
+                    )
+
+                    # Try to receive audio bytes only if still connected
+                    if self.connected:
+                        try:
+                            audio_data = await asyncio.wait_for(
+                                self._receive_message_or_bytes(), timeout=2.0
+                            )
+
+                            if audio_data and isinstance(audio_data, bytes):
+                                print(
+                                    f"🎵 Received audio data: {len(audio_data)} bytes (ignoring)"
+                                )
+                            elif audio_data:
+                                print(
+                                    f"❓ Unexpected data type after header: {type(audio_data)}"
+                                )
+                        except asyncio.TimeoutError:
+                            print("📝 No audio data received (timeout)")
+                        except websockets.exceptions.ConnectionClosed:
+                            print("📝 Connection closed while receiving audio data")
+                            self.connected = False
+
+                elif isinstance(header_message, bytes):
+                    # Sometimes the header and audio might come as one binary message
+                    print(
+                        f"🎵 Received binary data: {len(header_message)} bytes (ignoring)"
+                    )
+
+        except asyncio.TimeoutError:
+            # This is expected for mock server - no additional data sent
+            print("📝 No additional server data (mock server mode)")
+        except websockets.exceptions.ConnectionClosed:
+            print("📝 Connection closed while consuming additional data")
+            self.connected = False
+        except Exception as e:
+            print(f"⚠️ Error consuming additional server data: {e}")
+            # Don't mark as disconnected for other errors - might be recoverable
+
+    def is_connected(self) -> bool:
+        """
+        Check if the client is connected and the websocket is still open.
+
+        Returns:
+            True if connected and websocket is open, False otherwise
+        """
+        return (
+            self.connected
+            and self.websocket is not None
+            and self.websocket.close_code is None
+        )
+
+    async def reconnect(self) -> bool:
+        """
+        Attempt to reconnect to the voice manager.
+
+        Returns:
+            True if reconnection successful, False otherwise
+        """
+        print("🔄 Attempting to reconnect to voice manager...")
+
+        # Clean up existing connection
+        if self.websocket:
+            try:
+                await self.websocket.close()
+            except Exception:
+                pass  # Ignore errors during cleanup
+
+        self.websocket = None
+        self.connected = False
+
+        # Attempt new connection
+        return await self.connect()
 
     async def _message_listener(self):
         """Background task to listen for asynchronous messages from the server."""
@@ -190,6 +316,45 @@ class VoiceManagerClient:
         except websockets.exceptions.ConnectionClosed:
             print("❌ Connection closed while receiving message")
             self.connected = False
+            return None
+
+    async def _receive_message_or_bytes(self) -> Optional[Any]:
+        """
+        Receive a message that could be either JSON or binary data.
+
+        Returns:
+            Dict if JSON message, bytes if binary data, None if error
+        """
+        if not self.websocket:
+            return None
+
+        try:
+            message = await self.websocket.recv()
+
+            # Try to parse as JSON first
+            if isinstance(message, str):
+                try:
+                    return json.loads(message)
+                except json.JSONDecodeError:
+                    # If it's a string but not valid JSON, return as is
+                    return message
+            elif isinstance(message, bytes):
+                # Try to decode as JSON string first
+                try:
+                    decoded = message.decode("utf-8")
+                    return json.loads(decoded)
+                except (UnicodeDecodeError, json.JSONDecodeError):
+                    # If it's not JSON, return as binary data
+                    return message
+            else:
+                return message
+
+        except websockets.exceptions.ConnectionClosed:
+            print("❌ Connection closed while receiving message")
+            self.connected = False
+            return None
+        except Exception as e:
+            print(f"❌ Error receiving message: {e}")
             return None
 
     def get_connection_info(self) -> Dict[str, Any]:
