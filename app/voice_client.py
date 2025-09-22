@@ -52,7 +52,7 @@ class VoiceManagerClient:
         """
         try:
             uri = f"ws://{self.host}:{self.port}/ws"
-            print(f"🔌 Connecting to voice manager at {uri}...")
+            print(f"ℹ️ Connecting to voice manager at {uri}...")
 
             # Connect to websocket
             self.websocket = await websockets.connect(uri)
@@ -61,7 +61,7 @@ class VoiceManagerClient:
             # Send UID registration with new format: {"command": "UID", "message": "user_id"}
             uid_message = {"command": "UID", "message": self.user_id}
             await self._send_message(uid_message)
-            print(f"📤 Registering user ID (new format): {self.user_id}")
+            print(f"ℹ️ Registering user ID (new format): {self.user_id}")
 
             # Try to detect mock server error and fall back to legacy UID format
             try:
@@ -80,7 +80,7 @@ class VoiceManagerClient:
                                 or "First message must contain UID" in error_msg
                             ):
                                 print(
-                                    "ℹ️ Falling back to legacy UID registration format"
+                                    "⚠️ Falling back to legacy UID registration format"
                                 )
                                 await self._send_legacy_uid()
                         else:
@@ -95,7 +95,7 @@ class VoiceManagerClient:
             except websockets.exceptions.ConnectionClosed:
                 # Server closed after wrong UID format — try reconnect with legacy UID
                 print(
-                    "ℹ️ Server closed after UID registration, retrying with legacy format..."
+                    "⚠️ Server closed after UID registration, retrying with legacy format..."
                 )
                 if not await self._reconnect_with_legacy_uid(uri):
                     return False
@@ -118,7 +118,7 @@ class VoiceManagerClient:
         """Send legacy UID registration expected by the mock server: {"UID": "..."}."""
         legacy = {"UID": self.user_id}
         await self._send_message(legacy)
-        print(f"📤 Registering user ID (legacy format): {self.user_id}")
+        print(f"ℹ️ Registering user ID (legacy format): {self.user_id}")
 
     async def _reconnect_with_legacy_uid(self, uri: str) -> bool:
         """Reconnect and register using legacy UID format for mock server compatibility."""
@@ -161,7 +161,7 @@ class VoiceManagerClient:
             # Send user message with new format: {"command": "USER", "message": "content"}
             user_message = {"command": "USER", "message": prompt}
             await self._send_message(user_message)
-            print(f"📤 Sent: {prompt}")
+            print(f"ℹ️ Sent: {prompt}")
 
             # The server might send responses in different orders:
             # 1. LLM response first, then audio data
@@ -192,17 +192,17 @@ class VoiceManagerClient:
                     if command in ["LLM", "SPEAK", "WRONG"]:
                         llm_response = message
                         self.last_response = response
-                        print(f"📥 Received {command}: {llm_response}")
+                        print(f"ℹ️ Received {command}: {llm_response}")
                         break
                     elif command == "ERROR":
                         print(f"❌ Server error: {message}")
                         break
                     else:
-                        print(f"🎵 Ignoring command: {command}")
+                        print(f"ℹ️ Ignoring command: {command}")
                 elif isinstance(response, bytes):
-                    print(f"🎵 Received binary data: {len(response)} bytes (ignoring)")
+                    print(f"ℹ️ Received binary data: {len(response)} bytes (ignoring)")
                 else:
-                    print(f"❓ Received unexpected data type: {type(response)}")
+                    print(f"⚠️ Received unexpected data type: {type(response)}")
 
             if llm_response:
                 # Continue consuming any remaining audio data
@@ -233,17 +233,32 @@ class VoiceManagerClient:
             return
 
         try:
-            # Keep consuming data for a short time to clear any remaining audio data
-            # The _receive_command_message method will automatically ignore non-command data
+            # Keep consuming data briefly to clear any remaining non-command (e.g., audio) data.
+            # IMPORTANT: Do NOT consume command messages here; if we encounter one, push it back for later.
             timeout_attempts = 3
             for _ in range(timeout_attempts):
                 try:
-                    await asyncio.wait_for(self._receive_command_message(), timeout=0.5)
+                    message = await asyncio.wait_for(self.websocket.recv(), timeout=0.5)
                 except asyncio.TimeoutError:
                     break  # No more data to consume
 
+                # Binary data (e.g., audio bytes) — safe to ignore
+                if isinstance(message, (bytes, bytearray)):
+                    continue
+
+                # String data: if it's a command JSON, push back and stop; else ignore (e.g., audio header)
+                if isinstance(message, str):
+                    text = message.strip()
+                    if text.startswith('{"command"'):
+                        # Push back to be processed by the next logical receive
+                        self._prefetched_messages.insert(0, message)
+                        break
+                    else:
+                        # Non-command JSON (e.g., audio header) — ignore
+                        continue
+
         except websockets.exceptions.ConnectionClosed:
-            print("📝 Connection closed while consuming additional data")
+            print("⚠️ Connection closed while consuming additional data")
             self.connected = False
         except Exception as e:
             print(f"⚠️ Error consuming additional server data: {e}")
@@ -294,7 +309,7 @@ class VoiceManagerClient:
                     # Handle LLM responses with new format: {"command": "LLM", "message": "response"}
                     if data.get("command") == "LLM" and "message" in data:
                         llm_response = data["message"]
-                        print(f"📥 Received: {llm_response}")
+                        print(f"ℹ️ Received: {llm_response}")
                         self.last_response = data
 
                         # Call callback if set
@@ -304,7 +319,7 @@ class VoiceManagerClient:
                         print(f"❌ Unexpected message format: {data}")
 
                 except websockets.exceptions.ConnectionClosed:
-                    print("🔌 Connection closed by server")
+                    print("⚠️ Connection closed by server")
                     self.connected = False
                     break
                 except json.JSONDecodeError as e:
@@ -328,7 +343,7 @@ class VoiceManagerClient:
         # Close websocket
         if self.websocket and self.websocket.close_code is None:
             await self.websocket.close()
-            print("🔌 Disconnected from voice manager")
+            print("⚠️ Disconnected from voice manager")
 
         self.websocket = None
 
@@ -351,7 +366,7 @@ class VoiceManagerClient:
             # Handle binary data (audio bytes) that might come instead of JSON
             if isinstance(message, bytes):
                 print(
-                    f"🎵 Received binary data instead of JSON: {len(message)} bytes (ignoring)"
+                    f"⚠️ Received binary data instead of JSON: {len(message)} bytes (ignoring)"
                 )
                 return None
 
@@ -361,7 +376,7 @@ class VoiceManagerClient:
             # The message might be binary data that we should ignore
             return None
         except UnicodeDecodeError as e:
-            print(f"🎵 Received binary audio data: {e} (ignoring)")
+            print(f"⚠️ Received binary audio data: {e} (ignoring)")
             return None
         except websockets.exceptions.ConnectionClosed:
             print("❌ Connection closed while receiving message")
@@ -387,14 +402,14 @@ class VoiceManagerClient:
 
             # Handle binary data - ignore it
             if isinstance(message, bytes):
-                print(f"🎵 Ignoring binary data: {len(message)} bytes")
+                print(f"ℹ️ Ignoring binary data: {len(message)} bytes")
                 return None
 
             # Handle string messages
             if isinstance(message, str):
                 # Only process messages that start with {"command"
                 if not message.strip().startswith('{"command"'):
-                    print(f"🎵 Ignoring non-command message: {message[:50]}...")
+                    print(f"ℹ️ Ignoring non-command message: {message[:50]}...")
                     return None
 
                 try:
@@ -403,14 +418,14 @@ class VoiceManagerClient:
                     if isinstance(parsed, dict) and "command" in parsed:
                         return parsed
                     else:
-                        print("🎵 Ignoring message without command field")
+                        print("ℹ️ Ignoring message without command field")
                         return None
                 except json.JSONDecodeError:
-                    print("🎵 Ignoring invalid JSON message")
+                    print("ℹ️ Ignoring invalid JSON message")
                     return None
 
             # Ignore any other data types
-            print(f"🎵 Ignoring unknown message type: {type(message)}")
+            print(f"ℹ️ Ignoring unknown message type: {type(message)}")
             return None
 
         except websockets.exceptions.ConnectionClosed:
@@ -436,8 +451,8 @@ async def test_connection():
     """Test function to verify voice manager connection."""
     client = VoiceManagerClient()
 
-    print("🧪 Testing voice manager connection...")
-    print(f"📋 Connection info: {client.get_connection_info()}")
+    print("ℹ️ Testing voice manager connection...")
+    print(f"ℹ️ Connection info: {client.get_connection_info()}")
 
     try:
         # Connect
