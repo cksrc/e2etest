@@ -274,26 +274,8 @@ async def interactive_chat_session(client: VoiceManagerClient, scenario_file: Pa
 
         if not client.is_connected():
             print("Connection lost to voice manager")
-            print("The server may have closed the connection after sending audio data")
-
-            # Ask user if they want to reconnect and continue
-            try:
-                reconnect_choice = await asyncio.to_thread(
-                    input, "Try to reconnect and continue? (y/N): "
-                )
-                if reconnect_choice.strip().lower() in ["y", "yes"]:
-                    if await client.reconnect():
-                        print("Reconnected successfully! Continuing scenario...")
-                        continue
-                    else:
-                        print("Reconnection failed. Stopping scenario.")
-                        break
-                else:
-                    print("Scenario execution stopped.")
-                    break
-            except (EOFError, KeyboardInterrupt):
-                print("\nScenario execution interrupted")
-                break
+            print("Server is not responding. Exiting with error.")
+            sys.exit(1)
 
         try:
             # Show the command that will be executed when Enter is pressed
@@ -337,7 +319,8 @@ async def interactive_chat_session(client: VoiceManagerClient, scenario_file: Pa
                         if llm_response:
                             print(f"LLM Response: {llm_response}")
                         else:
-                            print("No response received from voice manager")
+                            print("Server is not responding. Exiting with error.")
+                            sys.exit(1)
 
                         # Don't increment i, stay on current command
                     else:
@@ -364,7 +347,8 @@ async def interactive_chat_session(client: VoiceManagerClient, scenario_file: Pa
                         if llm_response:
                             print(f"LLM Response: {llm_response}")
                         else:
-                            print("No response received from voice manager")
+                            print("Server is not responding. Exiting with error.")
+                            sys.exit(1)
                     else:
                         print("Empty command, skipping")
 
@@ -402,7 +386,8 @@ async def interactive_chat_session(client: VoiceManagerClient, scenario_file: Pa
                 if llm_response:
                     print(f"LLM Response: {llm_response}")
                 else:
-                    print("No response received from voice manager")
+                    print("Server is not responding. Exiting with error.")
+                    sys.exit(1)
 
                 i += 1  # Move to next command after successful send
 
@@ -585,8 +570,8 @@ async def headless_execution(client: VoiceManagerClient, scenario_file: Path):
             if await client.reconnect():
                 print("Reconnected successfully! Continuing scenario...")
             else:
-                print("Reconnection failed. Stopping scenario.")
-                break
+                print("Server is not responding. Exiting with error.")
+                sys.exit(1)
 
         try:
             print(
@@ -600,7 +585,8 @@ async def headless_execution(client: VoiceManagerClient, scenario_file: Path):
             if llm_response:
                 print(f"LLM Response: {llm_response}")
             else:
-                print("No response received from voice manager")
+                print("Server is not responding. Exiting with error.")
+                sys.exit(1)
 
             # Wait 3 seconds before next command (except for the last command)
             if i < len(scenario_lines) - 1:
