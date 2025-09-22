@@ -127,7 +127,6 @@ class VoiceManagerClient:
             # Send user message with new format: {"command": "USER", "message": "content"}
             user_message = {"command": "USER", "message": prompt}
             await self._send_message(user_message)
-            print(f"ℹ️ Sent: {prompt}")
 
             # The server might send responses in different orders:
             # 1. LLM response first, then audio data
@@ -135,7 +134,7 @@ class VoiceManagerClient:
             # We need to keep reading until we get the LLM response
 
             llm_response = None
-            max_attempts = 5  # Prevent infinite loop
+            max_attempts = 10  # Prevent infinite loop
             attempts = 0
 
             while attempts < max_attempts and self.connected:
@@ -158,7 +157,7 @@ class VoiceManagerClient:
                     if command in ["LLM", "SPEAK", "WRONG"]:
                         llm_response = message
                         self.last_response = response
-                        print(f"ℹ️ Received {command}: {llm_response}")
+
                         break
                     elif command == "ERROR":
                         print(f"❌ Server error: {message}")
