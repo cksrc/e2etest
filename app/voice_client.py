@@ -63,43 +63,6 @@ class VoiceManagerClient:
             await self._send_message(uid_message)
             print(f"ℹ️ Registering user ID (new format): {self.user_id}")
 
-            # Try to detect mock server error and fall back to legacy UID format
-            try:
-                incoming = await asyncio.wait_for(self.websocket.recv(), timeout=0.3)
-                if isinstance(incoming, (bytes, bytearray)):
-                    # Buffer binary too in case upper layers expect it
-                    self._prefetched_messages.append(incoming)
-                else:
-                    try:
-                        data = json.loads(incoming)
-                        if isinstance(data, dict) and "ERROR" in data:
-                            error_msg = str(data.get("ERROR"))
-                            # Mock server expects legacy UID format: {"UID": "..."}
-                            if (
-                                "UID" in error_msg
-                                or "First message must contain UID" in error_msg
-                            ):
-                                print(
-                                    "⚠️ Falling back to legacy UID registration format"
-                                )
-                                await self._send_legacy_uid()
-                        else:
-                            # Not an error: buffer for later consumption by send_user_message
-                            self._prefetched_messages.append(incoming)
-                    except Exception:
-                        # Non-JSON: buffer as-is
-                        self._prefetched_messages.append(incoming)
-            except asyncio.TimeoutError:
-                # No immediate error — proceed normally (real server case)
-                pass
-            except websockets.exceptions.ConnectionClosed:
-                # Server closed after wrong UID format — try reconnect with legacy UID
-                print(
-                    "⚠️ Server closed after UID registration, retrying with legacy format..."
-                )
-                if not await self._reconnect_with_legacy_uid(uri):
-                    return False
-
             # If we got here, consider registration successful
             print("✅ User ID registered")
             self.connected = True
@@ -158,6 +121,9 @@ class VoiceManagerClient:
             return None
 
         try:
+            # Clear any stale prefetched messages from previous turn to avoid mixing responses
+            self._prefetched_messages.clear()
+
             # Send user message with new format: {"command": "USER", "message": "content"}
             user_message = {"command": "USER", "message": prompt}
             await self._send_message(user_message)
@@ -237,6 +203,9 @@ class VoiceManagerClient:
             # IMPORTANT: Do NOT consume command messages here; if we encounter one, push it back for later.
             timeout_attempts = 3
             for _ in range(timeout_attempts):
+                # Ensure websocket is still available
+                if not self.websocket:
+                    break
                 try:
                     message = await asyncio.wait_for(self.websocket.recv(), timeout=0.5)
                 except asyncio.TimeoutError:
@@ -246,13 +215,12 @@ class VoiceManagerClient:
                 if isinstance(message, (bytes, bytearray)):
                     continue
 
-                # String data: if it's a command JSON, push back and stop; else ignore (e.g., audio header)
+                # String data: if it's a command JSON, discard as stale; else ignore (e.g., audio header)
                 if isinstance(message, str):
                     text = message.strip()
                     if text.startswith('{"command"'):
-                        # Push back to be processed by the next logical receive
-                        self._prefetched_messages.insert(0, message)
-                        break
+                        # Discard stale command messages from previous turn
+                        continue
                     else:
                         # Non-command JSON (e.g., audio header) — ignore
                         continue
