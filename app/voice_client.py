@@ -174,7 +174,13 @@ class VoiceManagerClient:
 
             while attempts < max_attempts and self.connected:
                 attempts += 1
-                response = await self._receive_command_message()
+                try:
+                    response = await asyncio.wait_for(
+                        self._receive_command_message(), timeout=1.0
+                    )
+                except asyncio.TimeoutError:
+                    # No message within timeout; try again until max_attempts
+                    continue
 
                 if response is None:
                     continue
@@ -187,6 +193,9 @@ class VoiceManagerClient:
                         llm_response = message
                         self.last_response = response
                         print(f"📥 Received {command}: {llm_response}")
+                        break
+                    elif command == "ERROR":
+                        print(f"❌ Server error: {message}")
                         break
                     else:
                         print(f"🎵 Ignoring command: {command}")
